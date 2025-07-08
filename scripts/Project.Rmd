@@ -1,0 +1,267 @@
+---
+title: "Final Project"
+author: "Puneeth Velivela"
+date: "`r Sys.Date()`"
+output: pdf_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+#adding all required packages
+library(ggplot2)
+library(tidyverse)
+library("reshape2")
+library(nnet)
+library(tree)
+library(rpart)
+library(rattle)
+library(caret)
+```
+
+```{r}
+getwd()
+diabetes <- read.csv("D:/MS/GMU/STAT-515/WD/ProjectAssignment/Dataset.csv")
+head(diabetes)
+str(diabetes)
+```
+
+Now Let's clean the dataset. check for null values
+
+```{r}
+diabetes=na.omit(diabetes)
+#Remove unnecessary columns like id patient number and id
+diabetes <- diabetes[, c("AGE", "Gender", "Urea", "Cr", "HbA1c", "Chol", "TG", "HDL", "LDL", "VLDL", "BMI", "CLASS")]
+summary(diabetes)
+table(diabetes$CLASS)
+table(diabetes$Gender)
+diabetes$Gender <- ifelse(diabetes$Gender == "f", "F", diabetes$Gender)
+diabetes$Gender <- as.numeric(factor(diabetes$Gender))
+# normalizing gender values between 0 and 1 (0 for F and 1 for M)
+diabetes$Gender <- diabetes$Gender-1
+#remove spaces in CLASS variable
+diabetes$CLASS <- trimws(diabetes$CLASS)
+table(diabetes$CLASS)
+#convert CLASS variable to factor variable
+diabetes$CLASS=as.factor(diabetes$CLASS)
+```
+
+Now lets do some visualizations on the dataset with respect to the class
+variable
+
+```{r}
+
+diabetes_visualization <- diabetes
+
+diabetes_visualization$CLASS <- factor(diabetes_visualization$CLASS, levels = c("N", "P", "Y"))
+create_boxplot <- function(variable) {
+  ggplot(diabetes, aes(x = CLASS, y = !!sym(variable), fill = CLASS)) +
+    geom_boxplot() +
+    labs(title = paste("Boxplot of", variable, "by CLASS")) +
+    theme_minimal()
+}
+
+create_density_plot <- function(variable) {
+  ggplot(diabetes_visualization, aes(x = !!sym(variable), fill = CLASS)) +
+    geom_density(alpha = 0.5) +
+    labs(title = paste("Density Plot of", variable, "by CLASS")) +
+    theme_minimal()
+}
+
+# List of numerical variables for visualization
+numerical_variables <- c("AGE", "Urea", "Cr", "HbA1c", "Chol", "TG", "HDL", "LDL", "VLDL", "BMI")
+
+# Create and display boxplots
+boxplot_list <- lapply(numerical_variables, create_boxplot)
+boxplot_list
+# Create and display density plots
+density_plot_list <- lapply(numerical_variables, create_density_plot)
+density_plot_list
+```
+
+Divide dataset into training(80%) and testing (20%)
+
+```{r}
+set.seed(42)
+train_indices <- sample(1:nrow(diabetes), 0.8 * nrow(diabetes))
+train_data <- diabetes[train_indices, ]
+test_data <- diabetes[-train_indices, ]
+```
+
+Research Question 1 1) a) How do various factors contribute to the
+likelihood of patients being diagnosed with diabetes, as indicated by
+the 'CLASS' variable. b) Identify and analyze the most influential
+features identified by the decision tree model. Assess the comparative
+effectiveness of a decision tree model against logistic regression in
+determining the presence or absence of a medical condition.
+
+```{r}
+# Fit multinomial logistic regression model with all variables
+full_model <- multinom(CLASS ~ AGE + Gender + BMI + Urea + Cr + HbA1c + Chol + TG + HDL + LDL + VLDL, data = train_data)
+
+# Summary of the model
+summary(full_model)
+
+logistic_full_model_prediction <- predict(full_model, newdata = test_data, type = "class")
+
+#Connfusion Matrix and Accuracy of the model
+confusionMatrix(logistic_full_model_prediction,test_data$CLASS)
+```
+
+selecting best subset by using stepwise selection and checking the model
+accuracy
+
+```{r}
+# Variable selection using stepwise selection
+stepwise_model <- step(full_model, direction = "both", trace = 0)
+
+# Summary of the stepwise model
+summary(stepwise_model)
+
+# Predict values on the testing dataset using the stepwise model
+predictions_stepwise <- predict(stepwise_model, newdata = test_data, type = "class")
+
+confusionMatrix(predictions_stepwise,test_data$CLASS)
+```
+
+```{r}
+diabetes_standardized <- diabetes
+
+numeric_vars <- c("AGE", "Gender","Urea", "Cr", "HbA1c", "Chol", "TG", "HDL", "LDL", "VLDL", "BMI")
+diabetes_standardized[, numeric_vars] <- scale(diabetes[, numeric_vars])
+#Fit multinomial logistic regression model with all variables
+stand_model <- multinom(CLASS ~ ., data = diabetes_standardized)
+summary(stand_model)
+
+predictions_standardized_model <- predict(stand_model, newdata = test_data, type = "class")
+
+confusionMatrix(predictions_standardized_model,test_data$CLASS)
+```
+
+Now lets Build tree models for the dataset.
+
+```{r}
+# Fit a decision tree model
+tree_model <- rpart(CLASS ~ ., data = train_data, method = "class")
+summary(tree_model)
+plot(tree_model)
+text(tree_model,pretty=0)
+```
+
+Pruning the tree and checking the accuracy
+
+```{r}
+
+# Fit an unpruned decision tree model
+unpruned_tree <- tree(CLASS ~ ., data = train_data)
+
+# Visualize the unpruned decision tree
+plot(unpruned_tree)
+text(unpruned_tree)
+
+predictions_unpruned <- predict(unpruned_tree, newdata = test_data, type = "class")
+
+confusionMatrix(predictions_unpruned,test_data$CLASS)
+```
+
+Pruned tree model with 4
+
+```{r}
+
+# Prune the decision tree
+pruned_tree <- prune.tree(unpruned_tree, best = 4)  
+plot(pruned_tree)
+text(pruned_tree)
+
+predictions_pruned <- predict(pruned_tree, newdata = test_data, type = "class")
+
+confusionMatrix(predictions_pruned,test_data$CLASS)
+```
+
+Research Question 2 What is the relationship between hbA1c levels and
+various factors, and how well can hbA1c be predicted using regression
+models? Additionally, can hierarchical clustering provide insights into
+the patterns of correlation among hbA1c and other variables.
+
+```{r}
+library(lmtest)
+library(corrplot)
+library(glmnet)
+library(ggplot2)
+```
+
+Ridge Regression
+
+```{r}
+# checking data types
+sapply(diabetes[, names(diabetes) != "HbA1c"], class)
+# Ridge Regression
+ridge_model <- cv.glmnet(as.matrix(diabetes[, names(diabetes) != "HbA1c"]), diabetes$HbA1c, alpha = 0)
+ridge_predictions <- predict(ridge_model, newx = as.matrix(diabetes[, names(diabetes) != "HbA1c"]))
+ridge_mse <- mean((ridge_predictions - diabetes$HbA1c)^2)
+ridge_mse
+
+# Lasso Regression
+lasso_model <- cv.glmnet(as.matrix(diabetes[, names(diabetes) != "HbA1c"]), diabetes$HbA1c, alpha = 1)
+lasso_predictions <- predict(lasso_model, newx = as.matrix(diabetes[, names(diabetes) != "HbA1c"]))
+lasso_mse <- mean((lasso_predictions - diabetes$HbA1c)^2)
+
+# Regression Analysis
+lm_model <- lm(HbA1c ~ ., data = diabetes)
+lm_predictions <- predict(lm_model, newdata = diabetes)
+lm_mse <- mean((lm_predictions - diabetes$HbA1c)^2)
+
+# Evaluate Models
+# Create a bar plot
+model_names <- c("Linear Regression", "Ridge Regression", "Lasso Regression")
+mse_values <- c(lm_mse, ridge_mse, lasso_mse)
+
+barplot(mse_values, names.arg = model_names, col = c("blue", "green", "red"),
+        main = "Model Comparison - Mean Squared Error",
+        ylab = "Mean Squared Error")
+
+# Correlation Analysis
+numeric_diabetes <- diabetes[, sapply(diabetes, is.numeric)]
+cor_matrix <- cor(numeric_diabetes)
+corrplot(cor_matrix, method = "color")
+
+# Hierarchical Clustering
+hc_result <- hclust(dist(diabetes),method="complete")
+par(mar = c(0, 0, 0, 0))
+# Creating hierarchical clustering plot without labels
+plot(hc_result, labels = FALSE)
+```
+
+Interpretation: From the bar graph, we can say that linear regression is
+the best regression model than ridge and lasso. From correlation matrix,
+we are finding which has direct relations here, HDL and Gender & HDL and
+LDL has more direct relations.
+
+Research Question 3 3Q) H0: There is no relationship between AGE and BMI
+versus the alternative hypothesis Ha: There is some relationship between
+AGE and BMI Test: Trying to find out the correlation between AGE and BMI
+and plot the relation.
+
+```{r}
+cor(diabetes$AGE,diabetes$BMI)
+
+fit = lm(AGE~BMI, data=diabetes);
+summary(fit)
+
+confint(fit)
+
+confint(fit, level =0.99 )
+
+(ggplot(diabetes,aes(x = AGE,y = BMI)) +
+    geom_point(shape = 21,fill = "red",
+               color = "black",size = 2) +
+    stat_smooth(method = lm,
+                color = "blue",fill = "cyan") +
+    labs(
+      x = "AGE",
+      y = "BMI",
+      title = "Corelation between age and BMI"))
+```
+
+Interpretation: There exits a correlation between AGE and BMI.
